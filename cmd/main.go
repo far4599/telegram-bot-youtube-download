@@ -64,16 +64,21 @@ func main() {
 			curMsgNum, curMsgLen int
 		)
 		for i, f := range result.Formats {
-			format, url, ext, asr, height := f.Format, f.Url, f.Ext, f.Asr, f.Height
+			format, url, ext, asr, height, bytesSize := f.Format, f.Url, f.Ext, f.Asr, f.Height, f.Filesize
 
 			t := strings.Split(format, " - ")
 
+			size := ""
+			if bytesSize > 0 {
+				size = fmt.Sprintf(" (%s)", bytesToHumanReadableSize(int64(bytesSize)))
+			}
+
 			var item string
 			if height == 0 {
-				item = fmt.Sprintf("%d. <a href='%s'>audio %.0f (%s)</a>", i+1, url, asr, ext)
+				item = fmt.Sprintf("%d. <a href='%s'>audio %.0f (%s)%s</a>", i+1, url, asr, ext, size)
 			} else {
 				item = strings.Join(t[1:], "")
-				item = fmt.Sprintf("%d. <a href='%s'>video %s (%s)</a>", i+1, url, item, ext)
+				item = fmt.Sprintf("%d. <a href='%s'>video %s (%s)%s</a>", i+1, url, item, ext, size)
 			}
 
 			if curMsgLen+len(item) > 4096 {
@@ -165,4 +170,19 @@ type VideoFormat struct {
 	Asr      float64 `json:"asr"`      // Audio sampling rate in Hertz
 	Filesize float64 `json:"filesize"` // The number of bytes, if known in advance
 	Url      string  `json:"url"`      // Url to download file
+}
+
+func bytesToHumanReadableSize(b int64) string {
+	const unit = 1 << 10
+
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
