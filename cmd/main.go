@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,17 +54,10 @@ func main() {
 			return
 		}
 
-		// Telegram message body length is limited by 4096 bytes, su we will divide
-		// result list of links into a few separate messages
+		links := make([]*Link, 0)
+		for _, f := range result.Formats {
+			link := new(Link)
 
-		var (
-			// messageLinks is the list of links in each message
-			// if length of all links in a message + new link length exceeds 4096 bytes
-			// then create a new message and add new link into this message
-			messageLinks         = make([][]string, 1)
-			curMsgNum, curMsgLen int
-		)
-		for i, f := range result.Formats {
 			format, url, ext, asr, height, bytesSize := f.Format, f.Url, f.Ext, f.Asr, f.Height, f.Filesize
 
 			t := strings.Split(format, " - ")
@@ -75,30 +69,51 @@ func main() {
 
 			var item string
 			if height == 0 {
-				item = fmt.Sprintf("%d. <a href='%s'>audio %.0f (%s)%s</a>", i+1, url, asr, ext, size)
+				link.Type = LinkTypeAudioOnly
+				link.Link = fmt.Sprintf("<a href='%s'>only audio %.0f (%s)%s</a>", url, asr, ext, size)
 			} else {
-				// ignore video without sound
-				if asr == 0 {
-					continue
-				}
-
 				item = strings.Join(t[1:], "")
-				item = fmt.Sprintf("%d. <a href='%s'>video %s (%s)%s</a>", i+1, url, item, ext, size)
+				link.Link = fmt.Sprintf("<a href='%s'>video with audio %s (%s)%s</a>", url, item, ext, size)
+				link.Type = LinkTypeVideoOnly
+				if asr > 0 {
+					link.Type = LinkTypeVideoWithAudio
+				}
 			}
 
-			if curMsgLen+len(item) > 4096 {
-				curMsgNum++
-				curMsgLen = 0
-				messageLinks = append(messageLinks, make([]string, 0))
-			}
-
-			messageLinks[curMsgNum] = append(messageLinks[curMsgNum], item)
-			curMsgLen += len(item)
+			links = append(links, link)
 		}
 
+		sort.Slice(links, func(i, j int) bool {
+			return links[i].Type > links[j].Type
+		})
+
 		// send all messages
-		for i := range messageLinks {
-			msg := strings.Join(messageLinks[i], "\n")
+		index := 1
+		msg := ""
+		for _, link := range links {
+			// drop video only links
+			if link.Type == LinkTypeVideoOnly {
+				continue
+			}
+
+			item := fmt.Sprintf("%d. %s\n", index, link.Link)
+
+			// Telegram message body is limited by 4096 bytes, so we add links to
+			// the message until its size exceed the limit, then send message and
+			// start filling in the new one
+			if len(msg)+len(link.Link) < 4096 {
+				msg += item
+			} else {
+				if _, err := b.Send(m.Sender, msg, tb.ModeHTML, tb.NoPreview); err != nil {
+					log.Error().Err(err).Str("message_body", msg).Msg("failed to send message")
+				}
+				msg = item
+			}
+			index++
+		}
+
+		// if the message body is not empty then send it
+		if len(msg) > 0 {
 			if _, err := b.Send(m.Sender, msg, tb.ModeHTML, tb.NoPreview); err != nil {
 				log.Error().Err(err).Str("message_body", msg).Msg("failed to send message")
 			}
@@ -177,6 +192,19 @@ type VideoFormat struct {
 	Filesize float64 `json:"filesize"` // The number of bytes, if known in advance
 	Url      string  `json:"url"`      // Url to download file
 }
+
+type Link struct {
+	Link string
+	Type LintType
+}
+
+type LintType int
+
+const (
+	LinkTypeAudioOnly LintType = iota
+	LinkTypeVideoOnly
+	LinkTypeVideoWithAudio
+)
 
 func bytesToHumanReadableSize(b int64) string {
 	const unit = 1 << 10
