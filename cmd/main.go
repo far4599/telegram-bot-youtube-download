@@ -77,6 +77,11 @@ func main() {
 			if height == 0 {
 				item = fmt.Sprintf("%d. <a href='%s'>audio %.0f (%s)%s</a>", i+1, url, asr, ext, size)
 			} else {
+				// ignore video without sound
+				if asr == 0 {
+					continue
+				}
+
 				item = strings.Join(t[1:], "")
 				item = fmt.Sprintf("%d. <a href='%s'>video %s (%s)%s</a>", i+1, url, item, ext, size)
 			}
@@ -113,6 +118,7 @@ func getVideoData(ctx context.Context, url string) (*VideoInfo, error) {
 		"--no-call-home",
 		"--no-cache-dir",
 		"--skip-download",
+		"--youtube-skip-dash-manifest",
 		// provide URL via stdin for security, youtube-dl has some run command args
 		"--batch-file", "-",
 		"-J",
