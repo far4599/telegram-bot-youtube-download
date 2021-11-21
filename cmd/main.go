@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go/v4"
 	"github.com/rs/zerolog/log"
 	_ "go.uber.org/automaxprocs"
 	tb "gopkg.in/tucnak/telebot.v2"
@@ -47,11 +48,27 @@ func main() {
 		// delete this temporary message after all
 		defer b.Delete(mm)
 
+		var (
+			result *VideoInfo
+			errG   error
+		)
+
 		// get video info and download links via youtube-dl
-		result, err := getVideoData(context.Background(), m.Text)
+		err = retry.Do(
+			func() error {
+				result, errG = getVideoData(context.Background(), m.Text)
+				if errG != nil {
+					log.Debug().Err(err).Msg("parse video url attempt failed")
+					return errG
+				}
+
+				return nil
+			},
+			retry.Attempts(10),
+		)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to parse video url")
-			b.Reply(m, "failed to parse video url")
+			_, _ = b.Reply(m, "failed to parse video url")
 			return
 		}
 

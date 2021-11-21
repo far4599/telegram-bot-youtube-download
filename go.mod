@@ -3,6 +3,7 @@ module github.com/far4599/telegram-bot-youtube-download
 go 1.16
 
 require (
+	github.com/avast/retry-go/v4 v4.0.1
 	github.com/rs/zerolog v1.26.0
 	go.uber.org/automaxprocs v1.4.0
 	gopkg.in/tucnak/telebot.v2 v2.4.1
