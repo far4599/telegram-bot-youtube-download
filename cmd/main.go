@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,14 @@ import (
 	"github.com/rs/zerolog/log"
 	_ "go.uber.org/automaxprocs"
 	tb "gopkg.in/tucnak/telebot.v2"
+)
+
+const (
+	concurrentYoutubeDlWorkers = 3
+)
+
+var (
+	youtubeDlSemaphore chan struct{}
 )
 
 func main() {
@@ -30,6 +39,20 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to connect to telegram bot api")
 		return
 	}
+
+	// set semaphore capacity to limit number of concurrent youtube-dl processes
+	var concurrentWorkers int64 = concurrentYoutubeDlWorkers
+	if conWorkersStr := os.Getenv("CONCURRENT_WORKERS"); conWorkersStr != "" {
+		conWorkers, err := strconv.ParseInt(conWorkersStr, 10, 64)
+		if err != nil {
+			log.Fatal().Err(err).Msg("CONCURRENT_WORKERS must be valid integer")
+		} else if conWorkers < 1 || conWorkers > 10 {
+			log.Fatal().Msg("CONCURRENT_WORKERS must be in range between 1 and 10")
+		}
+
+		concurrentWorkers = conWorkers
+	}
+	youtubeDlSemaphore = make(chan struct{}, concurrentWorkers)
 
 	// add handler for /start command
 	b.Handle("/start", func(m *tb.Message) {
@@ -144,6 +167,11 @@ func main() {
 }
 
 func getVideoData(ctx context.Context, url string) (*VideoInfo, error) {
+	youtubeDlSemaphore <- struct{}{}
+	defer func() {
+		<-youtubeDlSemaphore
+	}()
+
 	cmd := exec.CommandContext(
 		ctx,
 		"youtube-dl",
