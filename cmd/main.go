@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/avast/retry-go/v4"
+	"github.com/patrickmn/go-cache"
 	"github.com/rs/zerolog/log"
 	_ "go.uber.org/automaxprocs"
 	tb "gopkg.in/tucnak/telebot.v2"
@@ -27,9 +29,16 @@ const (
 
 var (
 	youtubeDlSemaphore chan struct{}
+	inMemCache         *cache.Cache
+	inMemCacheEnabled  bool
 )
 
 func main() {
+	if os.Getenv("NO_CACHE") != "true" {
+		inMemCacheEnabled = true
+		inMemCache = initInMemCache()
+	}
+
 	// init Telegram bot client
 	b, err := tb.NewBot(tb.Settings{
 		Token:  os.Getenv("BOT_TOKEN"),
@@ -63,36 +72,43 @@ func main() {
 	b.Handle(tb.OnText, func(m *tb.Message) {
 		log.Info().Str("message", m.Text).Msg("received message")
 
-		// send temporary message to show the work has started
-		mm, err := b.Send(m.Sender, "gathering info...")
-		if err != nil {
-			log.Error().Err(err).Msg("failed to send temporary message")
-		}
-		// delete this temporary message after all
-		defer b.Delete(mm)
-
 		var (
 			result *VideoInfo
 			errG   error
 		)
 
-		// get video info and download links via youtube-dl
-		err = retry.Do(
-			func() error {
-				result, errG = getVideoData(context.Background(), m.Text)
-				if errG != nil {
-					log.Debug().Err(err).Msg("parse video url attempt failed")
-					return errG
-				}
+		// get video info from cache
+		result = getVideoInfoFromCache(m.Text)
+		if result == nil {
+			// send temporary message to show the work has started
+			mm, err := b.Send(m.Sender, "gathering info...")
+			if err != nil {
+				log.Error().Err(err).Msg("failed to send temporary message")
+			}
+			// delete this temporary message after all
+			defer b.Delete(mm)
 
-				return nil
-			},
-			retry.Attempts(10),
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to parse video url")
-			_, _ = b.Reply(m, "failed to parse video url")
-			return
+			// get video info and download links via youtube-dl
+			err = retry.Do(
+				func() error {
+					result, errG = getVideoData(context.Background(), m.Text)
+					if errG != nil {
+						log.Debug().Err(err).Msg("parse video url attempt failed")
+						return errG
+					}
+
+					// save video info to the cache
+					saveVideoInfoToCache(m.Text, result)
+
+					return nil
+				},
+				retry.Attempts(10),
+			)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to parse video url")
+				_, _ = b.Reply(m, "failed to parse video url")
+				return
+			}
 		}
 
 		links := make([]*Link, 0)
@@ -111,10 +127,10 @@ func main() {
 			var item string
 			if height == 0 {
 				link.Type = LinkTypeAudioOnly
-				link.Link = fmt.Sprintf("<a href='%s'>only audio %.0f (%s)%s</a>", url, asr, ext, size)
+				link.DownloadUrl = fmt.Sprintf("<a href='%s'>only audio %.0f (%s)%s</a>", url, asr, ext, size)
 			} else {
 				item = strings.Join(t[1:], "")
-				link.Link = fmt.Sprintf("<a href='%s'>video with audio %s (%s)%s</a>", url, item, ext, size)
+				link.DownloadUrl = fmt.Sprintf("<a href='%s'>video with audio %s (%s)%s</a>", url, item, ext, size)
 				link.Type = LinkTypeVideoOnly
 				if asr > 0 {
 					link.Type = LinkTypeVideoWithAudio
@@ -137,15 +153,15 @@ func main() {
 				continue
 			}
 
-			item := fmt.Sprintf("%d. %s\n", index, link.Link)
+			item := fmt.Sprintf("%d. %s\n", index, link.DownloadUrl)
 
 			// Telegram message body is limited by 4096 bytes, so we add links to
 			// the message until its size exceed the limit, then send message and
 			// start filling in the new one
-			if len(msg)+len(link.Link) < 4096 {
+			if len(msg)+len(link.DownloadUrl) < 4096 {
 				msg += item
 			} else {
-				if _, err := b.Send(m.Sender, msg, tb.ModeHTML, tb.NoPreview); err != nil {
+				if _, err := b.Reply(m, msg, tb.ModeHTML, tb.NoPreview); err != nil {
 					log.Error().Err(err).Str("message_body", msg).Msg("failed to send message")
 				}
 				msg = item
@@ -155,7 +171,7 @@ func main() {
 
 		// if the message body is not empty then send it
 		if len(msg) > 0 {
-			if _, err := b.Send(m.Sender, msg, tb.ModeHTML, tb.NoPreview); err != nil {
+			if _, err := b.Reply(m, msg, tb.ModeHTML, tb.NoPreview); err != nil {
 				log.Error().Err(err).Str("message_body", msg).Msg("failed to send message")
 			}
 		}
@@ -240,8 +256,9 @@ type VideoFormat struct {
 }
 
 type Link struct {
-	Link string
-	Type LintType
+	OriginUrl   string
+	DownloadUrl string
+	Type        LintType
 }
 
 type LintType int
@@ -265,4 +282,37 @@ func bytesToHumanReadableSize(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
+}
+
+func initInMemCache() *cache.Cache {
+	return cache.New(30*time.Minute, 10*time.Minute)
+}
+
+func saveVideoInfoToCache(videoUrl string, video *VideoInfo) {
+	if !inMemCacheEnabled {
+		return
+	}
+
+	h := sha1.New()
+	h.Write([]byte(videoUrl))
+	bs := h.Sum(nil)
+
+	inMemCache.Set(string(bs), video, cache.DefaultExpiration)
+}
+
+func getVideoInfoFromCache(videoUrl string) *VideoInfo {
+	if !inMemCacheEnabled {
+		return nil
+	}
+
+	h := sha1.New()
+	h.Write([]byte(videoUrl))
+	bs := h.Sum(nil)
+
+	l, ok := inMemCache.Get(string(bs))
+	if !ok {
+		return nil
+	}
+
+	return l.(*VideoInfo)
 }
