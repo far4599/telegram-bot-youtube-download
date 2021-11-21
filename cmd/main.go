@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	_ "go.uber.org/automaxprocs"
 	tb "gopkg.in/tucnak/telebot.v2"
 )
 

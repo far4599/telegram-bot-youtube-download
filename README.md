@@ -5,7 +5,7 @@ When you send youtube video url to the bot, it will provide links to download th
 Replace "123456789:AAAeeeeeeeeeeeeeeeee" with your Telegram bot api token
 ```shell
 docker build -t youtube-bot .
-docker run -d -e BOT_TOKEN=123456789:AAAeeeeeeeeeeeeeeeee youtube-bot
+docker run -d --memory="128m" --cpus="2" -e BOT_TOKEN=123456789:AAAeeeeeeeeeeeeeeeee youtube-bot
 ```
 
 ### How to run with docker-compose 
