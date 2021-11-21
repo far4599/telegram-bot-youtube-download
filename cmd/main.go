@@ -20,7 +20,7 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/rs/zerolog/log"
 	_ "go.uber.org/automaxprocs"
-	tb "gopkg.in/tucnak/telebot.v2"
+	tb "gopkg.in/tucnak/telebot.v3"
 )
 
 const (
@@ -64,13 +64,19 @@ func main() {
 	youtubeDlSemaphore = make(chan struct{}, concurrentWorkers)
 
 	// add handler for /start command
-	b.Handle("/start", func(m *tb.Message) {
-		b.Send(m.Sender, "Send me youtube video link. And I'll send you download links.")
+	b.Handle("/start", func(c tb.Context) error {
+		return c.Send("Send me youtube video link. And I'll send you download links.")
+	})
+
+	// add handler for /service_list command
+	// shows the list of all supported streaming services
+	b.Handle("/service_list", func(c tb.Context) error {
+		return c.Send("Send me youtube video link. And I'll send you download links.")
 	})
 
 	// add handler for any text message
-	b.Handle(tb.OnText, func(m *tb.Message) {
-		log.Info().Str("message", m.Text).Msg("received message")
+	b.Handle(tb.OnText, func(c tb.Context) error {
+		log.Info().Str("message", c.Text()).Msg("received message")
 
 		var (
 			result *VideoInfo
@@ -78,27 +84,27 @@ func main() {
 		)
 
 		// get video info from cache
-		result = getVideoInfoFromCache(m.Text)
+		result = getVideoInfoFromCache(c.Text())
 		if result == nil {
 			// send temporary message to show the work has started
-			mm, err := b.Send(m.Sender, "gathering info...")
+			tmpMsg, err := c.Bot().Send(c.Sender(), "gathering info...")
 			if err != nil {
 				log.Error().Err(err).Msg("failed to send temporary message")
 			}
 			// delete this temporary message after all
-			defer b.Delete(mm)
+			defer b.Delete(tmpMsg)
 
 			// get video info and download links via youtube-dl
 			err = retry.Do(
 				func() error {
-					result, errG = getVideoData(context.Background(), m.Text)
+					result, errG = getVideoData(context.Background(), c.Text())
 					if errG != nil {
 						log.Debug().Err(err).Msg("parse video url attempt failed")
 						return errG
 					}
 
 					// save video info to the cache
-					saveVideoInfoToCache(m.Text, result)
+					saveVideoInfoToCache(c.Text(), result)
 
 					return nil
 				},
@@ -106,8 +112,8 @@ func main() {
 			)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to parse video url")
-				_, _ = b.Reply(m, "failed to parse video url")
-				return
+				_ = c.Reply("failed to parse video url")
+				return err
 			}
 		}
 
@@ -161,7 +167,7 @@ func main() {
 			if len(msg)+len(link.DownloadUrl) < 4096 {
 				msg += item
 			} else {
-				if _, err := b.Reply(m, msg, tb.ModeHTML, tb.NoPreview); err != nil {
+				if err := c.Reply(msg, tb.ModeHTML, tb.NoPreview); err != nil {
 					log.Error().Err(err).Str("message_body", msg).Msg("failed to send message")
 				}
 				msg = item
@@ -171,10 +177,12 @@ func main() {
 
 		// if the message body is not empty then send it
 		if len(msg) > 0 {
-			if _, err := b.Reply(m, msg, tb.ModeHTML, tb.NoPreview); err != nil {
+			if err := c.Reply(msg, tb.ModeHTML, tb.NoPreview); err != nil {
 				log.Error().Err(err).Str("message_body", msg).Msg("failed to send message")
 			}
 		}
+
+		return nil
 	})
 
 	log.Info().Msg("bot listens to new messages")

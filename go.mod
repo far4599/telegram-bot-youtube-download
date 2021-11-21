@@ -7,5 +7,5 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rs/zerolog v1.26.0
 	go.uber.org/automaxprocs v1.4.0
-	gopkg.in/tucnak/telebot.v2 v2.4.1
+	gopkg.in/tucnak/telebot.v3 v3.0.0-20211108093419-844466d6faf3
 )
