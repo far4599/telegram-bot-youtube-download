@@ -87,12 +87,12 @@ func (h *TelegramMessageHandler) OnNewMessage() telebot.HandlerFunc {
 
 		videoURL := m.Text()
 
-		videoInfo, err := h.vs.GetVideoInfo(ctx, videoURL)
+		videoInfo, json, err := h.vs.GetVideoInfo(ctx, videoURL)
 		if err != nil {
 			return err
 		}
 
-		videoOpts, err := h.vs.GetVideoOptions(ctx, videoInfo)
+		videoOpts, err := h.vs.GetVideoOptions(videoInfo, json)
 		if err != nil {
 			return err
 		}

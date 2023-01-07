@@ -8,11 +8,11 @@ import (
 	"io"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/avast/retry-go/v4"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
-	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/hash"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
 	"github.com/far4599/telegram-bot-youtube-download/internal/repository"
 	"github.com/google/uuid"
@@ -23,13 +23,14 @@ import (
 var (
 	ErrInvalidURL = fmt.Errorf("invalid url")
 	ErrNotFound   = fmt.Errorf("not found")
+
+	preferedAudioExt = []string{"m4a", "mp3", "webm"}
+	preferedVideoExt = []string{"mp4", "webm", "3gp"}
 )
 
 const (
 	cacheDir = "/tmp/yt-dlp"
 	tempDir  = "/tmp"
-
-	jsonInfoSuffix = ".info.json"
 )
 
 type VideoService struct {
@@ -44,41 +45,20 @@ func NewVideoService(maxRetry uint, repo *repository.InMemRepository) (*VideoSer
 	}, nil
 }
 
-func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.VideoInfo, error) {
-	opts := []string{
-		"-o", hash.Sha256(url),
-		"-P", tempDir,
-		"--no-download",
-		"--write-info-json",
-	}
-
-	_, err := readAll(s.runWithRetry(ctx, url, false, opts...))
+func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.VideoInfo, *fastjson.Value, error) {
+	out, err := readAll(s.runWithRetry(ctx, url, true, "--no-download"))
 	if err != nil {
 		if !errors.Is(err, new(retry.Error)) {
-			return nil, errors.Wrapf(ErrInvalidURL, "failed to get info for the provided url: '%v'", err)
+			return nil, nil, errors.Wrapf(ErrInvalidURL, "failed to get info for the provided url: '%v'", err)
 		}
 
-		return nil, err
-	}
-
-	opts = []string{
-		"--no-download",
-		"--load-info-json", path.Join(tempDir, hash.Sha256(url)+jsonInfoSuffix),
-	}
-
-	out, err := readAll(s.runWithRetry(ctx, url, true, opts...))
-	if err != nil {
-		if !errors.Is(err, new(retry.Error)) {
-			return nil, errors.Wrapf(ErrInvalidURL, "failed to get info for the provided url: '%v'", err)
-		}
-
-		return nil, err
+		return nil, nil, err
 	}
 
 	json, err := new(fastjson.Parser).ParseBytes(out)
 	if err != nil {
 		log.Logger.Errorw(err.Error(), "json", out)
-		return nil, errors.Wrapf(ErrInvalidURL, "failed to parse json: '%v'", err)
+		return nil, nil, errors.Wrapf(ErrInvalidURL, "failed to parse json: '%v'", err)
 	}
 
 	return &models.VideoInfo{
@@ -88,19 +68,14 @@ func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.Vi
 		Duration: json.GetInt("duration"),
 		Vertical: isVertical(json),
 		Youtube:  isYoutube(json),
-	}, nil
+	}, json, nil
 }
 
-func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo *models.VideoInfo) ([]*models.VideoOption, error) {
+func (s *VideoService) GetVideoOptions(videoInfo *models.VideoInfo, json *fastjson.Value) ([]*models.VideoOption, error) {
 	result := make([]*models.VideoOption, 0, 4)
 
-	dim := "height"
-	if videoInfo.Vertical {
-		dim = "width"
-	}
-
 	if videoInfo.Youtube {
-		opt, err := s.getAudioOption(ctx, videoInfo.URL)
+		opt, err := s.getVideoOption(json, -1)
 		if err == nil {
 			opt.VideoInfo = *videoInfo
 			s.saveToCache(opt)
@@ -109,9 +84,9 @@ func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo *models.Vi
 		}
 	}
 
-	sizes := []string{"300", "600", "1000"}
+	sizes := []int{300, 600, 1000}
 	for _, size := range sizes {
-		opt, err := s.getVideoOption(ctx, videoInfo.URL, dim, size)
+		opt, err := s.getVideoOption(json, size)
 		if err == nil {
 			opt.VideoInfo = *videoInfo
 			s.saveToCache(opt)
@@ -121,6 +96,76 @@ func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo *models.Vi
 	}
 
 	return result, nil
+}
+
+func (s *VideoService) getVideoOption(json *fastjson.Value, size int) (*models.VideoOption, error) {
+	extFilter := preferedVideoExt
+	var audio bool
+	if size == -1 {
+		extFilter = preferedAudioExt
+		audio = true
+	}
+
+	found := make(map[string][]*fastjson.Value)
+
+	formats := json.GetArray("formats")
+	for _, format := range formats {
+		ext := string(format.GetStringBytes("ext"))
+
+		found[ext] = append(found[ext], format)
+	}
+
+	vertical := isVertical(json)
+
+	var selected *fastjson.Value
+	for _, ext := range extFilter {
+		if selected != nil {
+			break
+		}
+
+		for _, format := range found[ext] {
+			if audio {
+				selected = format
+				continue
+			}
+
+			withAudio := len(format.GetStringBytes("abr")) > 0
+
+			dimSize := strings.Split(string(format.GetStringBytes("resolution")), "x")
+			if len(dimSize) != 2 {
+				continue
+			}
+
+			dim := 1
+			if vertical {
+				dim = 0
+			}
+
+			i, err := strconv.Atoi(dimSize[dim])
+			if err != nil {
+				return nil, err
+			}
+
+			if i > size {
+				if withAudio {
+					selected = format
+					break
+				}
+				if selected != nil {
+					continue
+				}
+
+				selected = format
+			}
+		}
+	}
+
+	return &models.VideoOption{
+		FormatID: getFormatID(selected),
+		Label:    getLabel(selected, audio, vertical),
+		Size:     getFilesize(selected),
+		Audio:    audio,
+	}, nil
 }
 
 func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoOption *models.VideoOption, err error) {
@@ -141,7 +186,6 @@ func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoOptio
 		"-P", tempDir,
 		"-f", videoOption.FormatID,
 		"--no-progress",
-		"--load-info-json", path.Join(tempDir, hash.Sha256(videoOption.VideoInfo.URL)+jsonInfoSuffix),
 		// "--force-overwrites",
 	}
 
@@ -238,55 +282,6 @@ func readAll(r io.ReadCloser, err error) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-func (s *VideoService) getAudioOption(ctx context.Context, url string) (*models.VideoOption, error) {
-	opts := []string{
-		"-f", "bestaudio[ext=m4a]",
-		"--no-download",
-		"--load-info-json", path.Join(tempDir, hash.Sha256(url)+jsonInfoSuffix),
-	}
-
-	out, err := readAll(s.runWithRetry(ctx, url, true, opts...))
-	if err != nil {
-		return nil, err
-	}
-
-	json, err := new(fastjson.Parser).ParseBytes(out)
-	if err != nil {
-		return nil, err
-	}
-
-	return &models.VideoOption{
-		FormatID: getFormatID(json),
-		Label:    "only audio",
-		Size:     getFilesize(json),
-		Audio:    true,
-	}, nil
-}
-
-func (s *VideoService) getVideoOption(ctx context.Context, url, dim, size string) (*models.VideoOption, error) {
-	opts := []string{
-		"-f", fmt.Sprintf("worst[%s>%s]", dim, size),
-		"--no-download",
-		"--load-info-json", path.Join(tempDir, hash.Sha256(url)+jsonInfoSuffix),
-	}
-
-	out, err := readAll(s.runWithRetry(ctx, url, true, opts...))
-	if err != nil {
-		return nil, err
-	}
-
-	json, err := new(fastjson.Parser).ParseBytes(out)
-	if err != nil {
-		return nil, err
-	}
-
-	return &models.VideoOption{
-		FormatID: getFormatID(json),
-		Label:    getLabel(json, dim),
-		Size:     getFilesize(json),
-	}, nil
-}
-
 func isVertical(v *fastjson.Value) bool {
 	w, err := v.Get("width").Int64()
 	if err != nil {
@@ -310,7 +305,16 @@ func getFormatID(v *fastjson.Value) string {
 	return strings.Trim(v.Get("format_id").String(), `"`)
 }
 
-func getLabel(v *fastjson.Value, dim string) string {
+func getLabel(v *fastjson.Value, audio, vertical bool) string {
+	if audio {
+		return "only audio"
+	}
+
+	dim := "height"
+	if vertical {
+		dim = "width"
+	}
+
 	return "p" + v.Get(dim).String()
 }
 

@@ -94,7 +94,7 @@ func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, vi
 			Performer(videoOption.VideoInfo.URL).
 			DurationSeconds(videoOption.VideoInfo.Duration)
 	} else {
-		md = message.Video(f, styling.Plain(videoOption.VideoInfo.Title))
+		md = message.Video(f, styling.Plain(videoOption.Label+" - "+videoOption.VideoInfo.Title))
 	}
 
 	_, err = target.Media(ctx, md)
