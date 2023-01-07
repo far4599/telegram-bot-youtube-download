@@ -6,20 +6,18 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path"
 	"strings"
-	"sync"
 
 	"github.com/avast/retry-go/v4"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
+	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/hash"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
 	"github.com/far4599/telegram-bot-youtube-download/internal/repository"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/valyala/fastjson"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -27,7 +25,12 @@ var (
 	ErrNotFound   = fmt.Errorf("not found")
 )
 
-const cacheDir = "/tmp/yt-dlp"
+const (
+	cacheDir = "/tmp/yt-dlp"
+	tempDir  = "/tmp"
+
+	jsonInfoSuffix = ".info.json"
+)
 
 type VideoService struct {
 	maxRetry uint
@@ -42,9 +45,30 @@ func NewVideoService(maxRetry uint, repo *repository.InMemRepository) (*VideoSer
 }
 
 func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.VideoInfo, error) {
-	out, err := readAll(s.runWithRetry(ctx, url, true))
+	opts := []string{
+		"-o", hash.Sha256(url),
+		"-P", tempDir,
+		"--no-download",
+		"--write-info-json",
+	}
+
+	_, err := readAll(s.runWithRetry(ctx, url, false, opts...))
 	if err != nil {
-		if !errors.Is(err, retry.Error{}) {
+		if !errors.Is(err, new(retry.Error)) {
+			return nil, errors.Wrapf(ErrInvalidURL, "failed to get info for the provided url: '%v'", err)
+		}
+
+		return nil, err
+	}
+
+	opts = []string{
+		"--no-download",
+		"--load-info-json", path.Join(tempDir, hash.Sha256(url)+jsonInfoSuffix),
+	}
+
+	out, err := readAll(s.runWithRetry(ctx, url, true, opts...))
+	if err != nil {
+		if !errors.Is(err, new(retry.Error)) {
 			return nil, errors.Wrapf(ErrInvalidURL, "failed to get info for the provided url: '%v'", err)
 		}
 
@@ -53,7 +77,8 @@ func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.Vi
 
 	json, err := new(fastjson.Parser).ParseBytes(out)
 	if err != nil {
-		return nil, err
+		log.Logger.Errorw(err.Error(), "json", out)
+		return nil, errors.Wrapf(ErrInvalidURL, "failed to parse json: '%v'", err)
 	}
 
 	return &models.VideoInfo{
@@ -74,51 +99,26 @@ func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo *models.Vi
 		dim = "width"
 	}
 
-	mu := sync.Mutex{}
-	errGroup, errCtx := errgroup.WithContext(ctx)
-
 	if videoInfo.Youtube {
-		errGroup.Go(func() error {
-			opt, err := s.getAudioOption(errCtx, videoInfo.URL)
-			if err != nil {
-				return nil
-			}
-
+		opt, err := s.getAudioOption(ctx, videoInfo.URL)
+		if err == nil {
 			opt.VideoInfo = *videoInfo
 			s.saveToCache(opt)
 
-			mu.Lock()
-			defer mu.Unlock()
-
 			result = append(result, opt)
-
-			return nil
-		})
+		}
 	}
 
 	sizes := []string{"300", "600", "1000"}
 	for _, size := range sizes {
-		size := size
-
-		errGroup.Go(func() error {
-			opt, err := s.getVideoOption(errCtx, videoInfo.URL, dim, size)
-			if err != nil {
-				return nil
-			}
-
+		opt, err := s.getVideoOption(ctx, videoInfo.URL, dim, size)
+		if err == nil {
 			opt.VideoInfo = *videoInfo
 			s.saveToCache(opt)
 
-			mu.Lock()
-			defer mu.Unlock()
-
 			result = append(result, opt)
-
-			return nil
-		})
+		}
 	}
-
-	errGroup.Wait()
 
 	return result, nil
 }
@@ -136,13 +136,12 @@ func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoOptio
 		fileName = id + ".mp3"
 	}
 
-	filePath := os.TempDir()
-
 	args := []string{
 		"-o", fileName,
-		"-P", filePath,
+		"-P", tempDir,
 		"-f", videoOption.FormatID,
 		"--no-progress",
+		"--load-info-json", path.Join(tempDir, hash.Sha256(videoOption.VideoInfo.URL)+jsonInfoSuffix),
 		// "--force-overwrites",
 	}
 
@@ -151,7 +150,7 @@ func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoOptio
 		return nil, err
 	}
 
-	videoOption.Path = path.Join(filePath, fileName)
+	videoOption.Path = path.Join(tempDir, fileName)
 
 	return videoOption, nil
 }
@@ -240,7 +239,13 @@ func readAll(r io.ReadCloser, err error) ([]byte, error) {
 }
 
 func (s *VideoService) getAudioOption(ctx context.Context, url string) (*models.VideoOption, error) {
-	out, err := readAll(s.runWithRetry(ctx, url, true, "-f", "bestaudio[ext=m4a]", "--skip-download"))
+	opts := []string{
+		"-f", "bestaudio[ext=m4a]",
+		"--no-download",
+		"--load-info-json", path.Join(tempDir, hash.Sha256(url)+jsonInfoSuffix),
+	}
+
+	out, err := readAll(s.runWithRetry(ctx, url, true, opts...))
 	if err != nil {
 		return nil, err
 	}
@@ -259,8 +264,13 @@ func (s *VideoService) getAudioOption(ctx context.Context, url string) (*models.
 }
 
 func (s *VideoService) getVideoOption(ctx context.Context, url, dim, size string) (*models.VideoOption, error) {
-	format := fmt.Sprintf("worst[%s>%s]", dim, size)
-	out, err := readAll(s.runWithRetry(ctx, url, true, "-f", format, "--skip-download"))
+	opts := []string{
+		"-f", fmt.Sprintf("worst[%s>%s]", dim, size),
+		"--no-download",
+		"--load-info-json", path.Join(tempDir, hash.Sha256(url)+jsonInfoSuffix),
+	}
+
+	out, err := readAll(s.runWithRetry(ctx, url, true, opts...))
 	if err != nil {
 		return nil, err
 	}
