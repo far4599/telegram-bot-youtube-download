@@ -129,7 +129,7 @@ func (s *VideoService) getVideoOption(json *fastjson.Value, size int) (*models.V
 				continue
 			}
 
-			withAudio := len(format.GetStringBytes("abr")) > 0
+			withAudio := format.GetInt("abr") > 0 || format.GetInt("asr") > 0 || string(format.GetStringBytes("acodec")) != "none" || string(format.GetStringBytes("audio_ext")) != "none"
 
 			dimSize := strings.Split(string(format.GetStringBytes("resolution")), "x")
 			if len(dimSize) != 2 {
@@ -146,18 +146,17 @@ func (s *VideoService) getVideoOption(json *fastjson.Value, size int) (*models.V
 				return nil, err
 			}
 
-			if i > size {
+			if i >= size {
 				if withAudio {
 					selected = format
 					break
 				}
-				if selected != nil {
-					continue
-				}
-
-				selected = format
 			}
 		}
+	}
+
+	if selected == nil {
+		return nil, ErrNotFound
 	}
 
 	return &models.VideoOption{
