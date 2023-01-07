@@ -210,6 +210,7 @@ func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.
 	defaultArgs := []string{
 		"--ignore-errors",
 		"--no-call-home",
+		"--geo-bypass",
 		"--cache-dir", cacheDir,
 		// provide URL via stdin for security, youtube-dl has some run command args
 		"--batch-file", "-",
