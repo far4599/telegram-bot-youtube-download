@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,6 +53,9 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 		if err != nil {
 			return err
 		}
+		defer func() {
+			os.Remove(videoOption.Path)
+		}()
 
 		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoOption)
 		if err != nil {
