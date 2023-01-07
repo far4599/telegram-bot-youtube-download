@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/far4599/telegram-bot-youtube-download/internal/config"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
@@ -42,17 +43,17 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 
 		defer m.Respond()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
 		defer cancel()
 
 		videoID := strings.TrimSpace(m.Callback().Data)
 
-		videoInfo, err := h.vs.DownloadVideo(context.Background(), videoID)
+		videoOption, err := h.vs.DownloadVideo(ctx, videoID)
 		if err != nil {
 			return err
 		}
 
-		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoInfo.Title, videoInfo.Path, videoInfo.Audio)
+		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoOption)
 		if err != nil {
 			return err
 		}
@@ -87,7 +88,7 @@ func (h *TelegramMessageHandler) OnNewMessage() telebot.HandlerFunc {
 			return err
 		}
 
-		videoOpts, err := h.vs.GetVideoOptions(ctx, *videoInfo, videoURL)
+		videoOpts, err := h.vs.GetVideoOptions(ctx, videoInfo)
 		if err != nil {
 			return err
 		}
@@ -121,7 +122,7 @@ func createVideoInfoMessage(info *models.VideoInfo, opts []*models.VideoOption) 
 				emoji = audioEmoji
 			}
 
-			title := emoji + " " + opt.Label
+			title := emoji + " " + opt.Label + " (" + humanize.Bytes(opt.Size) + ")"
 
 			rows = append(rows, inlineMenu.Row(inlineMenu.Data(title, opt.ID)))
 		}

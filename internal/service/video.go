@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/avast/retry-go/v4"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/valyala/fastjson"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -40,30 +42,6 @@ func NewVideoService(maxRetry uint, repo *repository.InMemRepository) (*VideoSer
 }
 
 func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.VideoInfo, error) {
-	infoBytes, err := readAll(s.runWithRetry(ctx, url, false, "--get-title", "--get-thumbnail"))
-	if err != nil {
-		return nil, err
-	} else if len(infoBytes) == 0 {
-		return nil, ErrNotFound
-	}
-
-	info := strings.Split(strings.TrimSpace(string(infoBytes)), "\n")
-
-	result := &models.VideoInfo{}
-	if len(info) > 0 {
-		result.Title = info[0]
-
-		if len(info) > 1 {
-			result.ThumbURL = info[1]
-		}
-	}
-
-	return result, nil
-}
-
-func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo models.VideoInfo, url string) ([]*models.VideoOption, error) {
-	result := make([]*models.VideoOption, 0, 4)
-
 	out, err := readAll(s.runWithRetry(ctx, url, true))
 	if err != nil {
 		if !errors.Is(err, retry.Error{}) {
@@ -78,39 +56,77 @@ func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo models.Vid
 		return nil, err
 	}
 
+	return &models.VideoInfo{
+		URL:      url,
+		Title:    string(json.GetStringBytes("title")),
+		ThumbURL: string(json.GetStringBytes("thumbnail")),
+		Duration: json.GetInt("duration"),
+		Vertical: isVertical(json),
+		Youtube:  isYoutube(json),
+	}, nil
+}
+
+func (s *VideoService) GetVideoOptions(ctx context.Context, videoInfo *models.VideoInfo) ([]*models.VideoOption, error) {
+	result := make([]*models.VideoOption, 0, 4)
+
 	dim := "height"
-	if isVertical(json) {
+	if videoInfo.Vertical {
 		dim = "width"
 	}
 
-	if isYoutube(json) {
-		opt, err := s.getAudioOption(ctx, url)
-		if err != nil {
-			return nil, err
-		}
+	mu := sync.Mutex{}
+	errGroup, errCtx := errgroup.WithContext(ctx)
 
-		videoInfo.Audio = true
-		opt.VideoInfo = videoInfo
+	if videoInfo.Youtube {
+		errGroup.Go(func() error {
+			opt, err := s.getAudioOption(errCtx, videoInfo.URL)
+			if err != nil {
+				return nil
+			}
 
-		s.saveToCache(url, opt)
-		result = append(result, opt)
+			opt.VideoInfo = *videoInfo
+			s.saveToCache(opt)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			result = append(result, opt)
+
+			return nil
+		})
 	}
 
 	sizes := []string{"300", "600", "1000"}
-	for i, size := range sizes {
-		opt, err := s.getVideoOption(ctx, url, dim, size)
-		if err == nil && i > 0 && result[len(result)-1] != opt {
-			opt.VideoInfo = videoInfo
-			s.saveToCache(url, opt)
+	for _, size := range sizes {
+		size := size
+
+		errGroup.Go(func() error {
+			opt, err := s.getVideoOption(errCtx, videoInfo.URL, dim, size)
+			if err != nil {
+				return nil
+			}
+
+			opt.VideoInfo = *videoInfo
+			s.saveToCache(opt)
+
+			mu.Lock()
+			defer mu.Unlock()
+
 			result = append(result, opt)
-		}
+
+			return nil
+		})
 	}
+
+	errGroup.Wait()
 
 	return result, nil
 }
 
-func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoInfo *models.VideoInfo, err error) {
-	videoOption, ok := s.getFromCache(id)
+func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoOption *models.VideoOption, err error) {
+	var ok bool
+
+	videoOption, ok = s.getFromCache(id)
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -127,17 +143,17 @@ func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoInfo 
 		"-P", filePath,
 		"-f", videoOption.FormatID,
 		"--no-progress",
-		"--force-overwrites",
+		// "--force-overwrites",
 	}
 
-	_, err = readAll(s.runWithRetry(ctx, videoOption.URL, false, args...))
+	_, err = readAll(s.runWithRetry(ctx, videoOption.VideoInfo.URL, false, args...))
 	if err != nil {
 		return nil, err
 	}
 
-	videoOption.VideoInfo.Path = path.Join(filePath, fileName)
+	videoOption.Path = path.Join(filePath, fileName)
 
-	return &videoOption.VideoInfo, nil
+	return videoOption, nil
 }
 
 func (s *VideoService) runWithRetry(ctx context.Context, url string, isJson bool, args ...string) (result io.ReadCloser, err error) {
@@ -173,6 +189,8 @@ func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.
 	}
 
 	args = append(defaultArgs, args...)
+
+	log.Logger.Infow("yt-dlp arguments", "args", args)
 
 	cmd := exec.CommandContext(
 		ctx,
@@ -286,7 +304,7 @@ func getLabel(v *fastjson.Value, dim string) string {
 	return "p" + v.Get(dim).String()
 }
 
-func getFilesize(v *fastjson.Value) int64 {
+func getFilesize(v *fastjson.Value) uint64 {
 	size := int64(0)
 	if v.Get("filesize") != nil {
 		size, _ = v.Get("filesize").Int64()
@@ -295,27 +313,22 @@ func getFilesize(v *fastjson.Value) int64 {
 		size, _ = v.Get("filesize_approx").Int64()
 	}
 
-	return size
+	return uint64(size)
 }
 
-func (s *VideoService) saveToCache(url string, opt *models.VideoOption) {
+func (s *VideoService) saveToCache(opt *models.VideoOption) {
 	opt.ID = uuid.New().String()
 
-	s.repo.Add(opt.ID, &models.CachedVideoOption{
-		FormatID:  opt.FormatID,
-		URL:       url,
-		Audio:     opt.Audio,
-		VideoInfo: opt.VideoInfo,
-	})
+	s.repo.Add(opt.ID, opt)
 }
 
-func (s *VideoService) getFromCache(id string) (*models.CachedVideoOption, bool) {
+func (s *VideoService) getFromCache(id string) (*models.VideoOption, bool) {
 	cachedOption, ok := s.repo.Get(id)
 	if !ok {
 		return nil, false
 	}
 
-	videoOption, ok := cachedOption.(*models.CachedVideoOption)
+	videoOption, ok := cachedOption.(*models.VideoOption)
 	if !ok {
 		defer s.repo.Remove(id)
 		return nil, false

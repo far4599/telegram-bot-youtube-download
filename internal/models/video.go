@@ -1,26 +1,24 @@
 package models
 
 type VideoInfo struct {
+	URL      string
 	Title    string
 	ThumbURL string
-	Path     string
-	Audio    bool
+
+	Duration int
+
+	Vertical bool
+	Youtube  bool
 }
 
 type VideoOption struct {
 	ID       string
 	FormatID string
 	Label    string
-	Size     int64
+	Size     uint64
 	Audio    bool
 
-	VideoInfo VideoInfo
-}
-
-type CachedVideoOption struct {
-	FormatID string
-	URL      string
-	Audio    bool
+	Path string
 
 	VideoInfo VideoInfo
 }

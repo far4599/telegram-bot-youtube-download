@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/far4599/telegram-bot-youtube-download/internal/config"
+	"github.com/far4599/telegram-bot-youtube-download/internal/models"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -71,14 +72,14 @@ func (c *UserBotClient) run(ctx context.Context) error {
 	})
 }
 
-func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, title, filePath string, audio bool) error {
+func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, videoOption *models.VideoOption) error {
 	api := tg.NewClient(c.client)
 	u := uploader.NewUploader(api)
 	s := message.NewSender(api).WithUploader(u)
 
-	f, err := u.FromPath(ctx, filePath)
+	f, err := u.FromPath(ctx, videoOption.Path)
 	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("failed to upload '%s'", filePath))
+		return errors.Wrap(err, fmt.Sprintf("failed to upload '%s'", videoOption.Path))
 	}
 
 	target := s.To(to)
@@ -87,10 +88,13 @@ func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, ti
 	}
 
 	var md message.MediaOption
-	if audio {
-		md = message.Audio(f).Title(title).Performer(title)
+	if videoOption.Audio {
+		md = message.Audio(f).
+			Title(videoOption.VideoInfo.Title).
+			Performer(videoOption.VideoInfo.URL).
+			DurationSeconds(videoOption.VideoInfo.Duration)
 	} else {
-		md = message.Video(f, styling.Plain(title))
+		md = message.Video(f, styling.Plain(videoOption.VideoInfo.Title))
 	}
 
 	_, err = target.Media(ctx, md)
