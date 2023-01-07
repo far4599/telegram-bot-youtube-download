@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -72,12 +73,12 @@ func (c *UserBotClient) run(ctx context.Context) error {
 	})
 }
 
-func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, videoOption *models.VideoOption) error {
+func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, videoOption *models.VideoOption, pipe io.Reader) error {
 	api := tg.NewClient(c.client)
 	u := uploader.NewUploader(api)
 	s := message.NewSender(api).WithUploader(u)
 
-	f, err := u.FromPath(ctx, videoOption.Path)
+	f, err := u.FromReader(ctx, videoOption.VideoInfo.Title, pipe)
 	if err != nil {
 		return errors.Wrap(err, fmt.Sprintf("failed to upload '%s'", videoOption.Path))
 	}

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"path"
 	"strconv"
 	"strings"
 
@@ -30,7 +29,6 @@ var (
 
 const (
 	cacheDir = "/tmp/yt-dlp"
-	tempDir  = "/tmp"
 )
 
 type VideoService struct {
@@ -167,35 +165,26 @@ func (s *VideoService) getVideoOption(json *fastjson.Value, size int) (*models.V
 	}, nil
 }
 
-func (s *VideoService) DownloadVideo(ctx context.Context, id string) (videoOption *models.VideoOption, err error) {
+func (s *VideoService) DownloadVideo(ctx context.Context, id string) (*models.VideoOption, io.ReadCloser, error) {
 	var ok bool
 
-	videoOption, ok = s.getFromCache(id)
+	videoOption, ok := s.getFromCache(id)
 	if !ok {
-		return nil, ErrNotFound
-	}
-
-	fileName := id + ".mp4"
-	if videoOption.Audio {
-		fileName = id + ".mp3"
+		return nil, nil, ErrNotFound
 	}
 
 	args := []string{
-		"-o", fileName,
-		"-P", tempDir,
+		"-o", "-",
 		"-f", videoOption.FormatID,
 		"--no-progress",
-		// "--force-overwrites",
 	}
 
-	_, err = readAll(s.runWithRetry(ctx, videoOption.VideoInfo.URL, false, args...))
+	out, err := runYtDlp(ctx, videoOption.VideoInfo.URL, false, args...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	videoOption.Path = path.Join(tempDir, fileName)
-
-	return videoOption, nil
+	return videoOption, out, nil
 }
 
 func (s *VideoService) runWithRetry(ctx context.Context, url string, isJson bool, args ...string) (result io.ReadCloser, err error) {
@@ -267,7 +256,7 @@ func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.
 		return nil, err
 	}
 
-	go cmd.Wait()
+	// go cmd.Wait()
 
 	return out, nil
 }

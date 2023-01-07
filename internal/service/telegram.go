@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -49,15 +49,13 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 
 		videoID := strings.TrimSpace(m.Callback().Data)
 
-		videoOption, err := h.vs.DownloadVideo(ctx, videoID)
+		videoOption, pipe, err := h.vs.DownloadVideo(ctx, videoID)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			os.Remove(videoOption.Path)
-		}()
+		defer pipe.Close()
 
-		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoOption)
+		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoOption, pipe)
 		if err != nil {
 			return err
 		}
@@ -85,7 +83,10 @@ func (h *TelegramMessageHandler) OnNewMessage() telebot.HandlerFunc {
 
 		m.Notify(telebot.FindingLocation)
 
-		videoURL := m.Text()
+		videoURL, err := fetchFirstURL(m.Text())
+		if err != nil {
+			videoURL = m.Text()
+		}
 
 		videoInfo, json, err := h.vs.GetVideoInfo(ctx, videoURL)
 		if err != nil {
@@ -137,4 +138,15 @@ func createVideoInfoMessage(info *models.VideoInfo, opts []*models.VideoOption) 
 	}
 
 	return
+}
+
+func fetchFirstURL(input string) (string, error) {
+	regex := regexp.MustCompile(`^https?://[^\s"]+$`)
+
+	match := regex.FindString(input)
+	if match == "" {
+		return "", ErrNotFound
+	}
+
+	return match, nil
 }
