@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -76,6 +77,7 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 		if err != nil {
 			return err
 		}
+		defer os.Remove(path)
 
 		log.Logger.Infow("video downloaded", "path", path)
 
