@@ -1,6 +1,3 @@
-.idea
-bin/
-
 # Binaries for programs and plugins
 *.exe
 *.exe~
@@ -16,3 +13,7 @@ bin/
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+.idea
+bin/
+.env
+session
