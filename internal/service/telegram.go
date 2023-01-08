@@ -34,6 +34,14 @@ func NewMessageHandler(conf *config.Config, vs *VideoService) *TelegramMessageHa
 	}
 }
 
+func (h *TelegramMessageHandler) OnStart() telebot.HandlerFunc {
+	return func(m telebot.Context) (err error) {
+		m.Send("Send me a video link (YouTube, Vimeo, etc). You may also share a link from the streaming application. And I'll send you download options if streaming service is supported.")
+
+		return nil
+	}
+}
+
 func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClient) telebot.HandlerFunc {
 	return func(m telebot.Context) (err error) {
 		defer func() {
@@ -46,6 +54,8 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
 		defer cancel()
+
+		m.Notify(telebot.UploadingVideo)
 
 		videoID := strings.TrimSpace(m.Callback().Data)
 

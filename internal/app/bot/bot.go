@@ -107,6 +107,7 @@ func (b *Bot) setMessageHandlers(botClient *telegram.BotClient, userbotClient *t
 	// dispatcher.OnNewMessage(b.tmh.OnNewMessage(api))
 	bot := botClient.Bot()
 
+	bot.Handle("/start", b.tmh.OnStart())
 	bot.Handle(telebot.OnText, b.tmh.OnNewMessage())
 	bot.Handle(telebot.OnCallback, b.tmh.OnCallback(userbotClient))
 

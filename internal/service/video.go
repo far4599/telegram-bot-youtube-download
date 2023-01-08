@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	ErrInvalidURL = fmt.Errorf("invalid url")
-	ErrNotFound   = fmt.Errorf("not found")
+	ErrInvalidURL    = fmt.Errorf("invalid url")
+	ErrNotFound      = fmt.Errorf("not found")
+	ErrVideoNotFound = fmt.Errorf("video not found")
 
 	preferedAudioExt = []string{"m4a", "mp3", "webm"}
 	preferedVideoExt = []string{"mp4", "webm", "3gp"}
@@ -47,16 +48,19 @@ func (s *VideoService) GetVideoInfo(ctx context.Context, url string) (*models.Vi
 	out, err := readAll(s.runWithRetry(ctx, url, true, "--no-download"))
 	if err != nil {
 		if !errors.Is(err, new(retry.Error)) {
-			return nil, nil, errors.Wrapf(ErrInvalidURL, "failed to get info for the provided url: '%v'", err)
+			return nil, nil, ErrInvalidURL
 		}
 
 		return nil, nil, err
 	}
 
+	if len(out) == 0 {
+		return nil, nil, ErrVideoNotFound
+	}
+
 	json, err := new(fastjson.Parser).ParseBytes(out)
 	if err != nil {
-		log.Logger.Errorw(err.Error(), "json", out)
-		return nil, nil, errors.Wrapf(ErrInvalidURL, "failed to parse json: '%v'", err)
+		return nil, nil, ErrVideoNotFound
 	}
 
 	return &models.VideoInfo{
