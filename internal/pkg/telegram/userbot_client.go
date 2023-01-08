@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -77,19 +76,39 @@ func (c *UserBotClient) run(ctx context.Context) error {
 	})
 }
 
-func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, videoOption *models.VideoOption, pipe io.Reader) error {
+func (c *UserBotClient) UploadFile(ctx context.Context, to tg.InputPeerClass, videoOption *models.VideoOption, path string) error {
 	api := tg.NewClient(c.client)
 	u := uploader.NewUploader(api)
 	s := message.NewSender(api).WithUploader(u)
 
-	f, err := u.FromReader(ctx, videoOption.VideoInfo.Title, pipe)
-	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("failed to upload '%s'", videoOption.Path))
-	}
+	uploaderProgress := NewUploaderProgress()
+	defer uploaderProgress.Close()
 
 	target := s.To(to)
 	if target == nil {
 		return nil
+	}
+
+	defer func() {
+		recover()
+
+		_ = target.TypingAction().Cancel(ctx)
+	}()
+
+	go func() {
+		for progress := range uploaderProgress.ProgressChan() {
+			log.Logger.Debugw("upload progress changed", "progress", progress)
+			if videoOption.Audio {
+				_ = target.TypingAction().UploadDocument(ctx, int(progress))
+			} else {
+				_ = target.TypingAction().UploadVideo(ctx, int(progress))
+			}
+		}
+	}()
+
+	f, err := u.WithProgress(uploaderProgress).FromPath(ctx, path)
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("failed to upload '%s'", path))
 	}
 
 	var md message.MediaOption

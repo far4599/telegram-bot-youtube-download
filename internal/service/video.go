@@ -6,17 +6,21 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/avast/retry-go/v4"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
+	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/hash"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
 	"github.com/far4599/telegram-bot-youtube-download/internal/repository"
-	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/valyala/fastjson"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -30,6 +34,7 @@ var (
 
 const (
 	cacheDir = "/tmp/yt-dlp"
+	tmpDir   = "/tmp"
 )
 
 type VideoService struct {
@@ -169,29 +174,69 @@ func (s *VideoService) getVideoOption(json *fastjson.Value, size int) (*models.V
 	}, nil
 }
 
-func (s *VideoService) DownloadVideo(ctx context.Context, id string) (*models.VideoOption, io.ReadCloser, error) {
-	var ok bool
-
-	videoOption, ok := s.getFromCache(id)
-	if !ok {
-		return nil, nil, ErrNotFound
-	}
-
+func (s *VideoService) DownloadVideo(ctx context.Context, videoOption *models.VideoOption) (string, error) {
 	args := []string{
 		"-o", "-",
 		"-f", videoOption.FormatID,
 		"--no-progress",
 	}
 
-	out, err := runYtDlp(ctx, videoOption.VideoInfo.URL, false, args...)
+	resp, err := s.runWithRetry(ctx, videoOption.VideoInfo.URL, false, args...)
 	if err != nil {
-		return nil, nil, err
+		return "", err
+	}
+	defer resp.Close()
+
+	fileName := videoOption.ID + ".mp4"
+	if videoOption.Audio {
+		fileName = videoOption.ID + ".mp3"
+	}
+	filePath := path.Join(tmpDir, fileName)
+
+	errGroup, errCtx := errgroup.WithContext(ctx)
+
+	errGroup.Go(func() error {
+		select {
+		case <-errCtx.Done():
+			return nil
+		case <-resp.closeCh:
+			return nil
+		case dlpErr, ok := <-resp.errCh:
+			if !ok {
+				return nil
+			}
+			return dlpErr
+		}
+	})
+
+	errGroup.Go(func() error {
+		f, errG := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0744)
+		if errG != nil {
+			return errG
+		}
+		defer f.Close()
+
+		_, errG = io.Copy(f, resp.out)
+		if errG != nil {
+			return errG
+		}
+
+		resp.Close()
+
+		return nil
+	})
+
+	err = errGroup.Wait()
+	if err != nil {
+		defer os.Remove(filePath)
+
+		return "", err
 	}
 
-	return videoOption, out, nil
+	return filePath, nil
 }
 
-func (s *VideoService) runWithRetry(ctx context.Context, url string, isJson bool, args ...string) (result io.ReadCloser, err error) {
+func (s *VideoService) runWithRetry(ctx context.Context, url string, isJson bool, args ...string) (result *dlpResponse, err error) {
 	err = retry.Do(
 		func() error {
 			res, errR := runYtDlp(ctx, url, isJson, args...)
@@ -210,8 +255,9 @@ func (s *VideoService) runWithRetry(ctx context.Context, url string, isJson bool
 	return
 }
 
-func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.ReadCloser, error) {
+func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (*dlpResponse, error) {
 	defaultArgs := []string{
+		"-q", "-v",
 		"--ignore-errors",
 		"--no-call-home",
 		"--geo-bypass",
@@ -226,7 +272,7 @@ func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.
 
 	args = append(defaultArgs, args...)
 
-	log.Logger.Infow("yt-dlp arguments", "args", args)
+	log.Logger.Infow("yt-dlp arguments", "args", args, "url", url)
 
 	cmd := exec.CommandContext(
 		ctx,
@@ -246,13 +292,18 @@ func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.
 		return nil, err
 	}
 
+	errCh := make(chan error, 10)
+
 	go func() {
 		const errorPrefix = "ERROR: "
 		stderrLineScanner := bufio.NewScanner(errOut)
 		for stderrLineScanner.Scan() {
 			line := stderrLineScanner.Text()
 			if strings.HasPrefix(line, errorPrefix) {
-				log.Logger.Errorw("yt-dlp returned error", "error", line[len(errorPrefix):])
+				log.Logger.Errorw("yt-dlp returned error", "error", line)
+				errCh <- dlpError(line)
+			} else {
+				log.Logger.Debug(line)
 			}
 		}
 	}()
@@ -261,18 +312,28 @@ func runYtDlp(ctx context.Context, url string, isJson bool, args ...string) (io.
 		return nil, err
 	}
 
-	// go cmd.Wait()
+	closeCh := make(chan struct{})
 
-	return out, nil
+	go func() {
+		<-closeCh
+
+		cmd.Wait()
+	}()
+
+	return &dlpResponse{
+		out:     out,
+		errCh:   errCh,
+		closeCh: closeCh,
+	}, nil
 }
 
-func readAll(r io.ReadCloser, err error) ([]byte, error) {
+func readAll(resp *dlpResponse, err error) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer resp.Close()
 
-	return io.ReadAll(r)
+	return io.ReadAll(resp.out)
 }
 
 func isVertical(v *fastjson.Value) bool {
@@ -324,7 +385,7 @@ func getFilesize(v *fastjson.Value) uint64 {
 }
 
 func (s *VideoService) saveToCache(opt *models.VideoOption) {
-	opt.ID = uuid.New().String()
+	opt.ID = hash.Sha256(opt.FormatID + opt.VideoInfo.URL)
 
 	s.repo.Add(opt.ID, opt)
 }
@@ -342,4 +403,33 @@ func (s *VideoService) getFromCache(id string) (*models.VideoOption, bool) {
 	}
 
 	return videoOption, true
+}
+
+type dlpResponse struct {
+	out     io.ReadCloser
+	errCh   chan error
+	closeCh chan struct{}
+
+	closeMu sync.Mutex
+	closed  bool
+}
+
+func (r *dlpResponse) Close() {
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+
+	if r.closed {
+		return
+	}
+
+	defer close(r.closeCh)
+	defer r.out.Close()
+
+	r.closed = true
+}
+
+type dlpError string
+
+func (e dlpError) Error() string {
+	return string(e)
 }

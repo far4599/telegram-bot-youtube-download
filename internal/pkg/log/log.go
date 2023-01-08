@@ -5,5 +5,6 @@ import (
 )
 
 var (
-	Logger = zap.Must(zap.NewProduction()).Sugar()
+	// Logger = zap.Must(zap.NewProduction()).Sugar()
+	Logger = zap.Must(zap.NewDevelopment()).Sugar()
 )

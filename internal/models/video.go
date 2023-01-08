@@ -18,7 +18,5 @@ type VideoOption struct {
 	Size     uint64
 	Audio    bool
 
-	Path string
-
 	VideoInfo VideoInfo
 }

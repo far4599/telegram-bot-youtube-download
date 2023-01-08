@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -46,7 +47,11 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 	return func(m telebot.Context) (err error) {
 		defer func() {
 			if err != nil {
-				log.Logger.Error(err)
+				errMsg := "error on upload: '%s'"
+				if errors.Is(err, new(dlpError)) {
+					errMsg = "error on download: '%s'"
+				}
+				defer m.Bot().Send(m.Sender(), fmt.Sprintf(errMsg, err))
 			}
 		}()
 
@@ -55,17 +60,26 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
 		defer cancel()
 
-		m.Notify(telebot.UploadingVideo)
-
 		videoID := strings.TrimSpace(m.Callback().Data)
+		videoOption, ok := h.vs.getFromCache(videoID)
+		if !ok {
+			return ErrNotFound
+		}
 
-		videoOption, pipe, err := h.vs.DownloadVideo(ctx, videoID)
+		if videoOption.Audio {
+			_ = m.Notify(telebot.UploadingDocument)
+		} else {
+			_ = m.Notify(telebot.UploadingVideo)
+		}
+
+		path, err := h.vs.DownloadVideo(ctx, videoOption)
 		if err != nil {
 			return err
 		}
-		defer pipe.Close()
 
-		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoOption, pipe)
+		log.Logger.Infow("video downloaded", "path", path)
+
+		err = userbotClient.UploadFile(ctx, &tg.InputPeerUser{UserID: m.Sender().ID}, videoOption, path)
 		if err != nil {
 			return err
 		}
