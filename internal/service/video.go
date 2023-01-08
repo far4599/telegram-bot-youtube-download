@@ -15,9 +15,9 @@ import (
 
 	"github.com/avast/retry-go/v4"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
-	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/hash"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
 	"github.com/far4599/telegram-bot-youtube-download/internal/repository"
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/valyala/fastjson"
 	"golang.org/x/sync/errgroup"
@@ -385,7 +385,7 @@ func getFilesize(v *fastjson.Value) uint64 {
 }
 
 func (s *VideoService) saveToCache(opt *models.VideoOption) {
-	opt.ID = hash.Sha256(opt.FormatID + opt.VideoInfo.URL)
+	opt.ID = uuid.New().String()
 
 	s.repo.Add(opt.ID, opt)
 }

@@ -92,6 +92,12 @@ func (h *TelegramMessageHandler) OnCallback(userbotClient *telegram.UserBotClien
 
 func (h *TelegramMessageHandler) OnNewMessage() telebot.HandlerFunc {
 	return func(m telebot.Context) (err error) {
+		defer func() {
+			if err != nil {
+				defer m.Bot().Send(m.Sender(), fmt.Sprintf("error: '%s'", err))
+			}
+		}()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
@@ -99,15 +105,9 @@ func (h *TelegramMessageHandler) OnNewMessage() telebot.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if err != nil {
-				defer m.Bot().Send(m.Sender(), fmt.Sprintf("error: '%s'", err))
-			}
+		defer m.Bot().Delete(tmpMsg)
 
-			m.Bot().Delete(tmpMsg)
-		}()
-
-		m.Notify(telebot.FindingLocation)
+		m.Notify(telebot.Typing)
 
 		videoURL, err := fetchFirstURL(m.Text())
 		if err != nil {
@@ -125,9 +125,7 @@ func (h *TelegramMessageHandler) OnNewMessage() telebot.HandlerFunc {
 		}
 
 		msg, opts := createVideoInfoMessage(videoInfo, videoOpts)
-		m.Send(msg, opts...)
-
-		return err
+		return m.Send(msg, opts...)
 	}
 }
 
