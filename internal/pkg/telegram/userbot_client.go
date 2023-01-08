@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/far4599/telegram-bot-youtube-download/internal/config"
 	"github.com/far4599/telegram-bot-youtube-download/internal/models"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
@@ -46,7 +47,10 @@ func (c *UserBotClient) run(ctx context.Context) error {
 	}
 
 	opts := telegram.Options{
-		Logger:    log.Logger.Desugar(),
+		Logger: log.Logger.Desugar(),
+		ReconnectionBackoff: func() backoff.BackOff {
+			return backoff.NewExponentialBackOff()
+		},
 		NoUpdates: true,
 		SessionStorage: &session.FileStorage{
 			Path: filepath.Join(sessionDir, "session.json"),
@@ -62,7 +66,7 @@ func (c *UserBotClient) run(ctx context.Context) error {
 		}
 
 		if !status.Authorized {
-			if _, err := c.client.Auth().Bot(ctx, c.conf.Telegram.Bot.Token); err != nil {
+			if _, err = c.client.Auth().Bot(ctx, c.conf.Telegram.Bot.Token); err != nil {
 				return errors.Wrap(err, "failed to login as userbot")
 			}
 		}

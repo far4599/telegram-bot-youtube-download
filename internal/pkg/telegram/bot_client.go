@@ -13,7 +13,7 @@ type BotClient struct {
 func NewBotClient(token string) (*BotClient, error) {
 	pref := telebot.Settings{
 		Token:  token,
-		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
+		Poller: &telebot.LongPoller{Timeout: 5 * time.Second},
 	}
 
 	bot, err := telebot.NewBot(pref)
