@@ -7,3 +7,8 @@ services:
     mem_limit: 128m
     env_file:
       - .env
+    volumes:
+      - bot-sessions-volume:/app/sessions
+
+volumes:
+  bot-sessions-volume:

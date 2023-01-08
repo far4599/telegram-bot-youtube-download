@@ -8,4 +8,4 @@ telegram:
     # Or $TELEGRAM_APP_HASH
     hash: 12312asd12
     # Or $TELEGRAM_APP_SESSION_DIR
-    session_dir: ./session/
+    session_dir: ./sessions/

@@ -16,4 +16,4 @@
 .idea
 bin/
 .env
-session
+sessions
