@@ -3,6 +3,7 @@ Send a video url (YouTube, Vimeo, etc) to the bot, it will download the video an
 
 ## Preparation
 Rename `.env.example` to `.env`. Update your bot token and app credentials in `.env`.
+To get app credentials, visit page https://my.telegram.org/apps and create a new app, if you haven't created one yet.
 
 ### How to run with docker
 ```shell
