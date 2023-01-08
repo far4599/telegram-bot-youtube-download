@@ -1,3 +1,11 @@
 telegram:
-  # TELEGRAM_TOKEN
-  token: xxx
+  bot:
+    # Or $TELEGRAM_BOT_TOKEN
+    token: 123456789:AAAeeeeeeeeeeeeeeeee
+  app:
+    # Or $TELEGRAM_APP_ID
+    id: 1234567
+    # Or $TELEGRAM_APP_HASH
+    hash: 12312asd12
+    # Or $TELEGRAM_APP_SESSION_DIR
+    session_dir: ./session/

@@ -2,8 +2,8 @@ version: "2.4"
 
 services:
   bot:
-    build: .
+    image: far4599/youtube-download-telegram-bot:latest
+    restart: always
     mem_limit: 128m
-    cpus: 2
-    environment:
-      BOT_TOKEN: 123456789:AAAeeeeeeeeeeeeeeeee
+    env_file:
+      - .env
