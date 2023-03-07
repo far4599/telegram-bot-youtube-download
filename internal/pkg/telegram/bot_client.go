@@ -3,7 +3,7 @@ package telegram
 import (
 	"time"
 
-	"gopkg.in/tucnak/telebot.v3"
+	"gopkg.in/telebot.v3"
 )
 
 type BotClient struct {

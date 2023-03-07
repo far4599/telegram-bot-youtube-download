@@ -15,7 +15,7 @@ import (
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/log"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/telegram"
 	"github.com/gotd/td/tg"
-	"gopkg.in/tucnak/telebot.v3"
+	"gopkg.in/telebot.v3"
 )
 
 const (

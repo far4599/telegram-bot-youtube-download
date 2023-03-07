@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 
+	_ "go.uber.org/automaxprocs"
+
 	"github.com/far4599/telegram-bot-youtube-download/internal/app"
 	"github.com/far4599/telegram-bot-youtube-download/internal/config"
 	"github.com/far4599/telegram-bot-youtube-download/internal/pkg/context"

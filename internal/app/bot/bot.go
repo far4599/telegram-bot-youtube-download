@@ -10,7 +10,7 @@ import (
 	"github.com/far4599/telegram-bot-youtube-download/internal/service"
 	"github.com/gotd/td/session"
 	"github.com/pkg/errors"
-	"gopkg.in/tucnak/telebot.v3"
+	"gopkg.in/telebot.v3"
 )
 
 type Bot struct {
